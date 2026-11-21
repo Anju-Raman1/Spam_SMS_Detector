@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spam SMS Detector</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f6f8; color: #222; margin: 0; padding: 20px; }
+    .card { max-width: 560px; margin: 20px auto; background: #fff; padding: 24px;
+            border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.1); }
+    h1 { font-size: 24px; text-align: center; margin: 0 0 6px; }
+    p.sub { text-align: center; color: #555; font-size: 14px; margin: 0 0 14px; }
+    textarea { width: 100%; min-height: 120px; padding: 10px; box-sizing: border-box; border: 1px solid #ccc;
+               border-radius: 8px; font-size: 15px; font-family: Arial, sans-serif; resize: vertical; }
+    .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+    .row button.ghost { flex: 1; min-width: 140px; padding: 8px; background: #eef2f7; color: #333;
+                        border: 1px solid #d5dbe3; border-radius: 8px; font-size: 13px; cursor: pointer; }
+    .row button.ghost:hover { background: #e2e8f0; }
+    button.main { width: 100%; margin-top: 14px; padding: 12px; background: #2563eb; color: #fff;
+                  border: 0; border-radius: 8px; font-size: 16px; cursor: pointer; }
+    button.main:hover { background: #1d4ed8; }
+    button.main:disabled { background: #9ca3af; cursor: wait; }
+    #result { margin-top: 20px; padding: 14px; border-radius: 8px; text-align: center; display: none; }
+    #result.spam { background: #fdecea; display: block; }
+    #result.ham { background: #e8f5e9; display: block; }
+    #result.bad { background: #fff7e6; color: #7a5200; font-size: 14px; display: block; }
+    #result .verdict { font-size: 22px; font-weight: bold; }
+    #result .pct { font-size: 14px; color: #444; margin-top: 4px; }
+    .chips { margin-top: 12px; font-size: 13px; text-align: left; }
+    .chips b { display: block; margin: 8px 0 4px; font-size: 12px; color: #555; }
+    .chip { display: inline-block; padding: 3px 9px; margin: 2px; border-radius: 12px; font-size: 12px; }
+    .chip.s { background: #f8c9c4; color: #7f1d1d; }
+    .chip.h { background: #bfe3c5; color: #14532d; }
+    #status { text-align: center; font-size: 13px; color: #777; margin-top: 12px; }
+    .note { margin-top: 18px; font-size: 12px; color: #777; text-align: center; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>📩 Spam SMS Detector</h1>
+    <p class="sub">Paste a text message and see whether the model thinks it is spam</p>
+
+    <textarea id="msg" maxlength="1000" placeholder="Type or paste a message here…"></textarea>
+    <div class="row">
+      <button type="button" class="ghost" id="exSpam">Try a spam example</button>
+      <button type="button" class="ghost" id="exHam">Try a normal example</button>
+      <button type="button" class="ghost" id="exTricky">Try a tricky example</button>
+    </div>
+    <button type="button" class="main" id="btn" disabled>Loading model…</button>
+
+    <div id="result"></div>
+    <div id="status"></div>
+
+    <p class="note">
+      A Naive Bayes model trained on about 4,100 English text messages. It runs entirely in your browser,
+      and your message is never sent anywhere. It looks only at which words appear, so it can miss modern
+      spam, other languages, and cleverly worded messages.
+    </p>
+  </div>
+
+  <script>
+    var model = null;
+
+    var SPAM_EXAMPLE = "WINNER!! You have been selected to receive a 900 pound prize reward. Call 09061701461 now to claim.";
+    var HAM_EXAMPLE = "Ok, I will call you after the meeting. Can you send me the address?";
+    // A normal message that the model wrongly finds suspicious, to show its limits
+    var TRICKY_EXAMPLE = "Unlimited texts. Limited minutes.";
+
+    // Same word splitting as the Python CountVectorizer: lowercase, words of 2 or more characters
+    function tokenize(text) {
+      var found = text.toLowerCase().match(/[\p{L}\p{N}_]{2,}/gu);
+      return found || [];
+    }
+
+    // Naive Bayes: start from the prior, then add the score of every known word
+    function analyze(text) {
+      var tokens = tokenize(text);
+      var counts = new Map();
+      tokens.forEach(function (t) { counts.set(t, (counts.get(t) || 0) + 1); });
+
+      var score = model.prior;
+      var contribs = [];
+      counts.forEach(function (n, word) {
+        if (Object.prototype.hasOwnProperty.call(model.words, word)) {
+          var value = n * model.words[word];
+          score += value;
+          contribs.push({ word: word, value: value });
+        }
+      });
+      return { prob: 1 / (1 + Math.exp(-score)), contribs: contribs, known: contribs.length, total: counts.size };
+    }
+
+    function chips(list, cls) {
+      return list.map(function (c) {
+        return '<span class="chip ' + cls + '">' + c.word + '</span>';
+      }).join(" ");
+    }
+
+    function check() {
+      var text = document.getElementById("msg").value.trim();
+      var box = document.getElementById("result");
+      if (text.length === 0) {
+        box.className = "bad";
+        box.textContent = "Please type or paste a message first.";
+        return;
+      }
+      var r = analyze(text);
+      if (r.known === 0) {
+        box.className = "bad";
+        box.textContent = "The model does not recognize any word in this message, so it cannot give a reliable answer.";
+        return;
+      }
+      var isSpam = r.prob >= 0.5;
+      var spamWords = r.contribs.filter(function (c) { return c.value > 0; })
+                                .sort(function (a, b) { return b.value - a.value; }).slice(0, 6);
+      var hamWords = r.contribs.filter(function (c) { return c.value < 0; })
+                               .sort(function (a, b) { return a.value - b.value; }).slice(0, 6);
+
+      var html = '<div class="verdict">' + (isSpam ? "🚫 Spam" : "✅ Not spam (ham)") + '</div>' +
+                 '<div class="pct">Spam probability: ' + (r.prob * 100).toFixed(1) + '%</div>' +
+                 '<div class="chips">';
+      if (spamWords.length) { html += '<b>Words pushing toward spam</b>' + chips(spamWords, "s"); }
+      if (hamWords.length) { html += '<b>Words pushing toward normal</b>' + chips(hamWords, "h"); }
+      html += '<b>The model recognized ' + r.known + ' of ' + r.total + ' different words in your message.</b></div>';
+
+      box.className = isSpam ? "spam" : "ham";
+      box.innerHTML = html;
+    }
+
+    document.getElementById("exSpam").addEventListener("click", function () {
+      document.getElementById("msg").value = SPAM_EXAMPLE;
+    });
+    document.getElementById("exHam").addEventListener("click", function () {
+      document.getElementById("msg").value = HAM_EXAMPLE;
+    });
+    document.getElementById("exTricky").addEventListener("click", function () {
+      document.getElementById("msg").value = TRICKY_EXAMPLE;
+    });
+    document.getElementById("btn").addEventListener("click", check);
+
+    // Load model.json (must be in the same folder as this page)
+    fetch("model.json")
+      .then(function (res) {
+        if (!res.ok) { throw new Error("model.json not found"); }
+        return res.json();
+      })
+      .then(function (data) {
+        model = data;
+        document.getElementById("btn").disabled = false;
+        document.getElementById("btn").textContent = "Check message";
+        document.getElementById("status").textContent =
+          "Model accuracy on test messages: " + model.test_accuracy + "% (spam precision " +
+          model.test_precision + "%, spam recall " + model.test_recall + "%).";
+      })
+      .catch(function () {
+        document.getElementById("btn").textContent = "Model not loaded";
+        document.getElementById("status").textContent =
+          "Could not load model.json. Open this page from its website link, not by double-clicking the file.";
+      });
+  </script>
+</body>
+</html>

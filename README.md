@@ -5,7 +5,7 @@ Classifies a text message as **spam** or **ham** (a normal message) using Naive 
 ## 🔗 Live Demo
 **[Try the website here](https://anju-raman1.github.io/Spam_SMS_Detector/)**
 
-![Website screenshot](screenshot.png)
+![Website screenshot](Spam_detection.png)
 
 ## Problem
 Spam messages waste time and can be harmful, but a spam filter must not block real messages. This project builds a filter that learns from labelled examples, and measures it with precision and recall on the spam class, because accuracy alone is misleading when spam is rare.
